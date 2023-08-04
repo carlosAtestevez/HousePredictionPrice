@@ -1,0 +1,531 @@
+---
+title: "House price prediction"
+author: "Carlos Estevez"
+date: "2023-08-01"
+output: 
+  html_document:
+    css: "bootstrap.css"
+---
+
+# Loading libraries
+```{r LoadingLibraries,warning=FALSE, message=FALSE}
+
+library(ggplot2)
+library(dplyr)
+library(olsrr)
+library(ggcorrplot)
+library(car)
+library(GGally)
+library(plotly)
+library(tidyverse)
+library(scales) 
+library(MASS)
+library(tidyverse)
+library(caret)
+library(glmnet)
+library(DAAG)
+library(boot)
+library(MASS)
+
+```
+
+#Loading data
+```{r LoadingData,warning=FALSE, message=FALSE}
+
+str_path = "C:\\Users\\cestevez\\Dropbox\\Cloud PC\\Thinkpad\\Thinkpad Desktop\\Master Data Science SMU\\Class_Sessions\\Data Science Sessions\\Repository\\SMU_MSDS_6371\\Project\\data\\"
+
+df_hp_raw_0 = read.csv(paste(str_path,"train.csv",sep = ""),header = TRUE)
+
+df_hp_test_kaggle = read.csv(paste(str_path,"test.csv",sep = ""))
+
+str_sub_file = paste(str_path,"custom_submission.csv",sep = "")
+str_fwd_file = paste(str_path,"fwd_submission.csv",sep = "")
+str_back_file = paste(str_path,"back_submission.csv",sep = "")
+str_stw_file = paste(str_path,"stw_submission.csv",sep = "")
+str_anamodel_file = paste(str_path,"ana_model.csv",sep = "")
+
+
+```
+
+#Analysis 1: Sales Price vs Living Area of the House
+```{r SalePriceLivingArea,warning=FALSE, message=FALSE}
+
+df_hp_raw_ana1 = df_hp_raw_0
+
+#Step 1: We select the neighborhood we want to analyze
+df_hp_sp_1 = df_hp_raw_ana1 %>% filter(Neighborhood == "NAmes" | Neighborhood == "Edwards" | 
+                                         Neighborhood == "BrkSide") %>% dplyr::select(SalePrice,GrLivArea,Neighborhood) 
+df_hp_sp_1$Id = 1:nrow(df_hp_sp_1)
+df_hp_sp_1$Neighborhood = as.factor(df_hp_sp_1$Neighborhood)
+df_hp_sp_2 = df_hp_sp_1 %>% dplyr::select(SalePrice,GrLivArea) 
+    
+#Step 2: Plot the data
+ggpairs(df_hp_sp_1,1:2)+scale_y_continuous(labels = scales::comma_format())
+ggcorrplot(cor(df_hp_sp_2),
+           hc.order = TRUE,
+           type = "full",
+           lab = TRUE)
+
+df_hp_sp_1%>%ggplot()+geom_point(aes(x=GrLivArea,y=SalePrice,color=Neighborhood,label=Id))+geom_smooth(aes(x=GrLivArea,y=SalePrice),method = "lm")+scale_x_continuous(labels = scales::comma_format())+scale_y_continuous(labels = scales::dollar_format())+labs(title="Sales Price vs Living area square feet",subtitle="Before outlier Correction",x="Living Area in Feet",y="Sales Price($US)")
+
+#Conclusion-->It seems there are some outliers(Obs: 131,339,190,169) and we will likely need to remove them
+#As a result the correlation is not too strong
+
+#Exploring the relationship with Neighborhoods
+df_hp_sp_1%>%ggplot(aes(x=Neighborhood,y=SalePrice))+geom_point()+scale_y_continuous(labels = scales::comma_format())+labs(title="Sales Price vs Beighborhood",x="Neighborhood")
+
+#Step 3: Building a tentative model
+lm_tent_model_1 = lm(SalePrice~GrLivArea,data=df_hp_sp_1)
+summary(lm_tent_model_1)
+par(mfrow=c(2,2))
+plot(lm_tent_model_1)
+
+ols_plot_diagnostics(lm_tent_model_1)
+ols_plot_cooksd_chart(lm_tent_model_1)
+ols_results = ols_plot_resid_lev(lm_tent_model_1)
+lst_outliers = ols_results$data %>% filter(fct_color=="outlier" | fct_color=="outlier & leverage")
+#Step 4: Cleaning data after identifying outliers
+type_outlier_process = 1
+if(type_outlier_process == 1){
+ df_hp_sp_clean_1 = df_hp_sp_1[c(-131,-339,-169,-190),] 
+ #df_hp_sp_clean_1 = df_hp_sp_1[c(-188,-168),]
+}else{
+ df_hp_sp_clean_1 = df_hp_sp_1[lst_outliers$obs*-1,]  
+}
+df_hp_sp_clean_1%>%ggplot()+geom_point(aes(x=GrLivArea,y=SalePrice,color=Neighborhood,label=Id))+geom_smooth(aes(x=GrLivArea,y=SalePrice),method = "lm")+scale_x_continuous(labels = scales::comma_format())+scale_y_continuous(labels = scales::dollar_format())+labs(title="Sales Price vs Living area square feet",subtitle="After outlier Correction",x="Living Area in Feet",y="Sales Price")
+
+#Step 4: Running the model after tweaking
+lm_tent_model_1 = lm(SalePrice~GrLivArea,data=df_hp_sp_clean_1)
+summary(lm_tent_model_1)
+par(mfrow=c(2,2))
+plot(lm_tent_model_1)
+ols_plot_cooksd_chart(lm_tent_model_1)
+
+df_hp_sp_clean_2 = df_hp_sp_clean_1%>% dplyr::select(SalePrice,GrLivArea)
+ggcorrplot(cor(df_hp_sp_clean_2),
+           hc.order = TRUE,
+           type = "full",
+           lab = TRUE)
+
+#Step 5: Selecting the final model: Full vs Reduce
+df_hp_sp_clean_1$Neighborhood = relevel(df_hp_sp_clean_1$Neighborhood,"NAmes")
+lm_ana_full = lm(SalePrice~GrLivArea*Neighborhood,data=df_hp_sp_clean_1)
+summary(lm_ana_full)
+ols_plot_diagnostics(lm_tent_model_1)
+plot(lm_ana_full)
+vif(lm_ana_full)
+anova(lm_ana_full)
+confint(lm_ana_full,level = 0.95)
+sqrt(mean(lm_ana_full$residuals^2))
+
+lm_ana_reduce = lm(SalePrice~GrLivArea+Neighborhood,data=df_hp_sp_clean_1)
+sqrt(mean(lm_ana_reduce$residuals^2))
+summary(lm_ana_reduce)
+anova(lm_ana_reduce)
+
+#As we can see it, the full model is more robust
+anova(lm_ana_reduce,lm_ana_full)
+  
+#Conclusion as you can see the full model is the best 
+
+#Predicted Sales price = B0+B2*NHOO+(GAREA+B3*NHOO)*B1
+#Predicted Sales price = B0+B2*NHOOE+B4*NHOON+B1*GAREA+B3*(NHOOE*GAREA)+B5*(NHOON*GAREA)
+#Predicted Sales price = 19971.514+17128.908*NHOOE+60354.199*NHOON+87.163*GAREA-17.004*(NHOOE*GAREA)-37.601*(NHOON*GAREA)
+#BRKSide-->19971.514+87.163*GAREA
+#Edwards-->19971.514+17128.908+87.163*GAREA-17.004*(GAREA) = 37100.42+70.159*GAREA
+#NAmes-->19971.514+60354.199+87.163*GAREA-37.601*(NHOON*GAREA) = 80325.71+49.562*GAREA
+
+brside_eq = function(GAREA){
+    19971.514+87.163*GAREA
+}
+eduards_eq = function(GAREA){
+    37100.42+70.159*GAREA
+}
+names_eq = function(GAREA){
+    80325.71+49.562*GAREA
+}
+
+ggplot(df_hp_sp_clean_1,aes(x=GrLivArea,y=SalePrice,colour=Neighborhood))+geom_function(fun=brside_eq,color="red",size=1)+geom_function(fun=eduards_eq,color="green",size=1)+geom_function(fun=names_eq,color="blue",size=1)+geom_point(aes(x=GrLivArea,y=SalePrice))+labs(title="Sales Price vs Living area square feet",x="Living area square feet", y = "Sales Price",subtitle = "Three Equations by Neigborhood")+scale_x_continuous(labels = scales::comma_format())+scale_y_continuous(labels = scales::comma_format())
+
+
+```
+
+
+
+# Functions
+```{r}
+
+do_cleaning = function(pdf_hp_raw_1){
+  pdf_hp_raw_1$Alley[is.na(pdf_hp_raw_1$Alley)] = "NOALLEY"
+  pdf_hp_raw_1$MSZoning[is.na(pdf_hp_raw_1$MSZoning)] = "NOZONE"
+  pdf_hp_raw_1$MasVnrType[is.na(pdf_hp_raw_1$MasVnrType)] = "NOVTYPE"
+  pdf_hp_raw_1$BsmtQual[is.na(pdf_hp_raw_1$BsmtQual)] = "NOBSMT"
+  pdf_hp_raw_1$PoolQC[is.na(pdf_hp_raw_1$PoolQC)] = "NOPOOL"
+  pdf_hp_raw_1$Fence[is.na(pdf_hp_raw_1$Fence)] = "NOFENCE"
+  pdf_hp_raw_1$MiscFeature[is.na(pdf_hp_raw_1$MiscFeature)] = "NOMISC"
+  pdf_hp_raw_1$BsmtCond[is.na(pdf_hp_raw_1$BsmtCond)] = "NOBSMCON"
+  pdf_hp_raw_1$BsmtExposure[is.na(pdf_hp_raw_1$BsmtExposure)] = "NOBSMEXP"
+  pdf_hp_raw_1$BsmtFinType1[is.na(pdf_hp_raw_1$BsmtFinType1)] = "NOBFT"
+  pdf_hp_raw_1$GarageType[is.na(pdf_hp_raw_1$GarageType)] = "NOGTYPE"
+  pdf_hp_raw_1$GarageFinish[is.na(pdf_hp_raw_1$GarageFinish)] = "NOGTFI"
+  pdf_hp_raw_1$BsmtFinType2[is.na(pdf_hp_raw_1$BsmtFinType2)] = "NOBFT"
+  pdf_hp_raw_1$FireplaceQu[is.na(pdf_hp_raw_1$FireplaceQu)] = "NOFRQU"
+  pdf_hp_raw_1$GarageQual[is.na(pdf_hp_raw_1$GarageQual)] = "NOGQUA"
+  pdf_hp_raw_1$GarageCond[is.na(pdf_hp_raw_1$GarageCond)] = "NOGQUA"
+  pdf_hp_raw_1$Electrical[is.na(pdf_hp_raw_1$Electrical)] = "NOELEC"
+  pdf_hp_raw_1$Exterior1st[is.na(pdf_hp_raw_1$Exterior1st)] = "NOEXT"
+  pdf_hp_raw_1$Exterior2nd[is.na(pdf_hp_raw_1$Exterior2nd)] = "NOEXT"
+  pdf_hp_raw_1$Utilities[is.na(pdf_hp_raw_1$Utilities)] = "NOUTIL"
+  pdf_hp_raw_1$BsmtFullBath[is.na(pdf_hp_raw_1$BsmtFullBath)] = 0
+  pdf_hp_raw_1$BsmtHalfBath[is.na(pdf_hp_raw_1$BsmtHalfBath)] = 0
+  pdf_hp_raw_1$KitchenQual[is.na(pdf_hp_raw_1$KitchenQual)] = "NOKIT"
+  pdf_hp_raw_1$Functional[is.na(pdf_hp_raw_1$Functional)] = "NOFUNC"
+  pdf_hp_raw_1$SaleType[is.na(pdf_hp_raw_1$SaleType)] = "NOSTY"
+  
+
+  pdf_hp_raw_1$LotFrontage[is.na(pdf_hp_raw_1$LotFrontage)] = mean(pdf_hp_raw_1$LotFrontage[!is.na(pdf_hp_raw_1$LotFrontage)])
+  pdf_hp_raw_1$MasVnrArea[is.na(pdf_hp_raw_1$MasVnrArea)] = mean(pdf_hp_raw_1$MasVnrArea[!is.na(pdf_hp_raw_1$MasVnrArea)])
+  pdf_hp_raw_1$GarageYrBlt[is.na(pdf_hp_raw_1$GarageYrBlt)] = mean(pdf_hp_raw_1$GarageYrBlt[!is.na(pdf_hp_raw_1$GarageYrBlt)])
+  pdf_hp_raw_1$BsmtFinSF1[is.na(pdf_hp_raw_1$BsmtFinSF1)] = mean(pdf_hp_raw_1$BsmtFinSF1[!is.na(pdf_hp_raw_1$BsmtFinSF1)])
+  pdf_hp_raw_1$BsmtFinSF2[is.na(pdf_hp_raw_1$BsmtFinSF2)] = mean(pdf_hp_raw_1$BsmtFinSF2[!is.na(pdf_hp_raw_1$BsmtFinSF2)])
+  pdf_hp_raw_1$BsmtUnfSF[is.na(pdf_hp_raw_1$BsmtUnfSF)] = mean(pdf_hp_raw_1$BsmtUnfSF[!is.na(pdf_hp_raw_1$BsmtUnfSF)])
+  pdf_hp_raw_1$TotalBsmtSF[is.na(pdf_hp_raw_1$TotalBsmtSF)] = mean(pdf_hp_raw_1$TotalBsmtSF[!is.na(pdf_hp_raw_1$TotalBsmtSF)])
+  pdf_hp_raw_1$GarageCars[is.na(pdf_hp_raw_1$GarageCars)] = mean(pdf_hp_raw_1$GarageCars[!is.na(pdf_hp_raw_1$GarageCars)])
+  pdf_hp_raw_1$GarageArea[is.na(pdf_hp_raw_1$GarageArea)] = mean(pdf_hp_raw_1$GarageArea[!is.na(pdf_hp_raw_1$GarageArea)])
+
+return(pdf_hp_raw_1)
+}
+
+```
+
+# Cleaning up data(Replacing NAN, Transformation and Factors)
+```{r}
+
+df_hp_raw_1 = df_hp_raw_0
+
+#---------->Cleaning Missing Values<-----------------------<
+
+
+df_hp_raw_1 = do_cleaning(df_hp_raw_1)
+lst_nan_values = sapply(df_hp_raw_1, function(x) sum(is.na(x)))
+lst_nan_values
+
+df_hp_test_kaggle = do_cleaning(df_hp_test_kaggle)
+lst_nan_values = sapply(df_hp_test_kaggle, function(x) sum(is.na(x)))
+lst_nan_values
+
+
+#---------->Cleaning Missing Values<-----------------------<
+
+df_hp_raw_1 = df_hp_raw_1 %>% mutate_if(is.character, as.factor)
+df_hp_test_kaggle = df_hp_test_kaggle %>% mutate_if(is.character, as.factor)
+
+#Transforming Data
+df_hp_raw_1$logSalePrice = log(df_hp_raw_1$SalePrice)
+df_hp_raw_1 = df_hp_raw_1 %>% mutate(LotFrontage = ifelse(LotFrontage==0,0.1,LotFrontage))
+df_hp_raw_1$logLotFrontage = log(df_hp_raw_1$LotFrontage)
+
+df_hp_raw_1 = df_hp_raw_1 %>% mutate(LotArea = ifelse(LotArea==0,0.1,LotArea))
+df_hp_raw_1$logLotArea = log(df_hp_raw_1$LotArea)
+
+df_hp_raw_1 = df_hp_raw_1 %>% mutate(TotalBsmtSF = ifelse(TotalBsmtSF==0,0.1,TotalBsmtSF))
+df_hp_raw_1$logTotalBsmtSF = log(df_hp_raw_1$TotalBsmtSF)
+
+df_hp_raw_1 = df_hp_raw_1 %>% mutate(OpenPorchSF = ifelse(OpenPorchSF==0,0.1,OpenPorchSF))
+df_hp_raw_1$logOpenPorchSF = log(df_hp_raw_1$OpenPorchSF)
+
+df_hp_raw_1 = df_hp_raw_1 %>% mutate(OpenPorchSF = ifelse(ScreenPorch==0,0.1,ScreenPorch))
+df_hp_raw_1$logScreenPorch = log(df_hp_raw_1$ScreenPorch)
+
+df_hp_raw_1 = df_hp_raw_1 %>% mutate(PoolArea = ifelse(PoolArea==0,0.1,PoolArea))
+df_hp_raw_1$logPoolArea = log(df_hp_raw_1$PoolArea)
+
+df_hp_cont_0 = df_hp_raw_1[,c(4,5,20,21,27,35,37,38,39,44,45,46,47,52,53,55,57,60,62,63,67,68,69,70,71,72,76,77,78,81,82,83,84,85,86,87)]
+df_hp_cont_1 = df_hp_raw_1[,c(1,4,5,20,21,27,35,37,38,39,44,45,46,47,81,82)]
+df_hp_cont_2 = df_hp_raw_1[,c(52,53,55,57,60,62,63,67,68,69,70,71,72,76,77,78,81,82)]
+
+
+
+```
+
+#Analyzing categirical variables
+```{r}
+
+#LotFrontage,Log transformation X
+df_hp_raw_1 %>% ggplot(aes(x=LotFrontage,y=SalePrice))+geom_point()
+#LotArea,maybe Transformation x
+df_hp_raw_1 %>% ggplot(aes(x=LotArea,y=SalePrice))+geom_point()
+#YearRemodAdd, log transformation Y
+df_hp_raw_1 %>% ggplot(aes(x=YearRemodAdd,y=SalePrice))+geom_point()
+#MasVnrArea
+df_hp_raw_1 %>% ggplot(aes(x=MasVnrArea,y=SalePrice))+geom_point()
+#BsmtFinSF1
+df_hp_raw_1 %>% ggplot(aes(x=BsmtFinSF1,y=SalePrice))+geom_point()
+#BsmtFinSF2
+df_hp_raw_1 %>% ggplot(aes(x=BsmtFinSF2,y=SalePrice))+geom_point()
+#BsmtUnfSF
+df_hp_raw_1 %>% ggplot(aes(x=BsmtUnfSF,y=SalePrice))+geom_point()
+#TotalBsmtSF, maybe Log transformation Y
+df_hp_raw_1 %>% ggplot(aes(x=TotalBsmtSF,y=SalePrice))+geom_point()
+#1stFlrSF
+df_hp_raw_1 %>% ggplot(aes(x=X1stFlrSF,y=SalePrice))+geom_point()
+#LowQualFinSF, Remove it 
+df_hp_raw_1 %>% ggplot(aes(x=LowQualFinSF,y=SalePrice))+geom_point()
+#GrLivArea
+df_hp_raw_1 %>% ggplot(aes(x=GrLivArea,y=SalePrice))+geom_point()
+#Bedroom, Maybe turn it into categorical
+df_hp_raw_1 %>% ggplot(aes(x=BedroomAbvGr,y=SalePrice))+geom_point()
+#KitchenAbvGr, Maybe turn it into categorical
+df_hp_raw_1 %>% ggplot(aes(x=KitchenAbvGr,y=SalePrice))+geom_point()
+#TotRmsAbvGrd
+df_hp_raw_1 %>% ggplot(aes(x=TotRmsAbvGrd,y=SalePrice))+geom_point()
+#Fireplaces, Maybe turn it into categorical
+df_hp_raw_1 %>% ggplot(aes(x=Fireplaces,y=SalePrice))+geom_point()
+#GarageYrBlt
+df_hp_raw_1 %>% ggplot(aes(x=GarageYrBlt,y=SalePrice))+geom_point()
+#GarageCars
+df_hp_raw_1 %>% ggplot(aes(x=GarageCars,y=SalePrice))+geom_point()
+#GarageArea
+df_hp_raw_1 %>% ggplot(aes(x=GarageArea,y=logSalePrice))+geom_point()
+#WoodDeckSF
+df_hp_raw_1 %>% ggplot(aes(x=WoodDeckSF,y=SalePrice))+geom_point()
+#OpenPorchSF, log transformation x
+df_hp_raw_1 %>% ggplot(aes(x=OpenPorchSF,y=SalePrice))+geom_point()
+#EnclosedPorch
+df_hp_raw_1 %>% ggplot(aes(x=EnclosedPorch,y=SalePrice))+geom_point()
+#3SsnPorch, remove it
+df_hp_raw_1 %>% ggplot(aes(x=X3SsnPorch,y=logSalePrice))+geom_point()
+#ScreenPorch, remove it
+df_hp_raw_1 %>% ggplot(aes(x=ScreenPorch,y=SalePrice))+geom_point()
+#PoolArea, remove it
+df_hp_raw_1$logPoolArea = log(df_hp_raw_1$PoolArea)
+df_hp_raw_1 %>% ggplot(aes(x=PoolArea,y=logSalePrice))+geom_point()
+#MiscVal, remove it
+df_hp_raw_1 %>% ggplot(aes(x=MiscVal,y=SalePrice))+geom_point()
+#MoSold, remove it
+df_hp_raw_1 %>% ggplot(aes(x=MoSold,y=SalePrice))+geom_point()
+#YrSold
+df_hp_raw_1 %>% ggplot(aes(x=YrSold,y=SalePrice))+geom_point()
+df_hp_raw_1 %>% ggplot(aes(x=YrSold,y=SalePrice))+geom_bar(stat="identity")
+
+```
+
+
+# Setting models
+```{r}
+
+df_hp_cont_clean_1 = df_hp_cont_0
+df_hp_clean_1 = df_hp_raw_1
+
+
+df_hp_clean_ml_custom = df_hp_clean_1 %>% dplyr::select(SalePrice,LotFrontage,LotArea,YearBuilt,YearRemodAdd,MasVnrArea,BsmtFinSF2,BsmtUnfSF,
+                             TotalBsmtSF,X1stFlrSF,GrLivArea,BedroomAbvGr,TotRmsAbvGrd,Fireplaces,GarageYrBlt,
+                             GarageCars,GarageArea,WoodDeckSF,OpenPorchSF,MSZoning,LotShape,LandContour,
+                             Neighborhood,Condition1,BldgType,HouseStyle,OverallQual,
+                       RoofStyle,Exterior1st,Exterior2nd,MasVnrType,ExterQual,Foundation,
+                       BsmtQual,BsmtExposure,HeatingQC,Heating,CentralAir,
+                       KitchenQual,Functional,GarageType,GarageFinish)
+
+df_hp_clean_ml = df_hp_clean_1 %>% dplyr::select(-c(logSalePrice,logLotFrontage,logLotArea,logTotalBsmtSF,logOpenPorchSF,logScreenPorch,logPoolArea,Id))
+
+```
+
+#Building tentative models and cleaning outliers
+```{r}
+#Analyzing initial outlines
+
+#c(-314,-524,-1299,-346,-1181,-346,-935),
+#df_hp_cont_1 = df_hp_cont_1[-c(314,336,250,707),]
+#df_hp_clean_ml_custom = df_hp_clean_ml_custom[-c(314,336,250,707),]
+# df_hp_clean_ml = df_hp_clean_ml[-c(314,336,250,707),]
+# df_hp_cont_1 %>% ggplot(aes(x=LotArea,y=SalePrice,label=Id))+geom_point()+geom_text()
+# df_hp_cont_1 %>% ggplot(aes(x=LotArea,y=SalePrice))+geom_point()
+# df_hp_clean_ml %>% ggplot(aes(x=LotArea,y=SalePrice))+geom_point()
+# ggpairs(df_hp_cont_1)
+# ggcorrplot(cor(df_hp_cont_1),
+#            hc.order = TRUE,
+#            type = "full",
+#            lab = TRUE)
+
+
+
+#---------------------------------SETTING THE TESTING DATASET------------------<
+df_hp_test_kaggle_new = df_hp_test_kaggle                              
+lst_func_del = df_hp_test_kaggle_new %>% filter(MSZoning=="NOZONE") %>% dplyr::select(Id)
+df_hp_test_kaggle_new$MSZoning[df_hp_test_kaggle_new$MSZoning=="NOZONE"]="RM"
+df_hp_test_kaggle_new$Functional[df_hp_test_kaggle_new$Functional=="Sev"]="Typ"
+df_hp_test_kaggle_new$Exterior1st[df_hp_test_kaggle_new$Exterior1st=="NOEXT"]="VinylSd"
+df_hp_test_kaggle_new$Exterior2nd[df_hp_test_kaggle_new$Exterior2nd=="NOEXT"]="VinylSd"
+df_hp_test_kaggle_new$KitchenQual[df_hp_test_kaggle_new$KitchenQual=="NOKIT"]="Gd"
+df_hp_test_kaggle_new$Functional[df_hp_test_kaggle_new$Functional=="NOFUNC"]="Typ"
+df_hp_test_kaggle_new$Utilities[df_hp_test_kaggle_new$Utilities=="NOUTIL"]="AllPub"
+df_hp_test_kaggle_new$SaleType[df_hp_test_kaggle_new$SaleType=="NOSTY"]="WD"
+df_hp_test_kaggle_new$Condition2[df_hp_test_kaggle_new$Condition2=="PosN"]="Norm"
+df_hp_test_kaggle_new$PoolQC[df_hp_test_kaggle_new$PoolQC=="Ex"]="NOPOOL"
+
+
+df_hp_test_kaggle_log_new = df_hp_test_kaggle_new
+df_hp_test_kaggle_log_new$logLotArea = log(df_hp_test_kaggle_log_new$LotArea)
+df_hp_test_kaggle_log_new$logLotFrontage = log(df_hp_test_kaggle_log_new$LotFrontage)
+df_hp_test_kaggle_log_new$logTotalBsmtSF = log(df_hp_test_kaggle_log_new$TotalBsmtSF)
+
+
+#----------------------------------Custom Model--------------------------------<
+
+#Tentative model
+lm_custom_reduce_model = lm(SalePrice~.,df_hp_clean_ml_custom)
+par(mfrow=c(2,2))
+plot(lm_custom_reduce_model)
+ols_plot_diagnostics(lm_custom_reduce_model)
+ols_plot_cooksd_chart(lm_custom_reduce_model)
+df_results_residuals = ols_plot_resid_lev(lm_custom_reduce_model)
+
+#Cleaning outliers
+df_results_res_out= df_results_residuals$data
+lst_outliers = df_results_res_out %>% filter(fct_color=="outlier" | fct_color=="outlier & leverage")
+lst_outliers_del = c(lst_outliers$obs,1454,1299,524,1299)
+df_hp_clean_ml_custom_1 = df_hp_clean_ml_custom[lst_outliers_del*-1,]
+
+
+lm_custom_reduce_model = lm(SalePrice~.,df_hp_clean_ml_custom_1)
+summary(lm_custom_reduce_model)
+plot(lm_custom_reduce_model)
+ols_plot_resid_lev(lm_custom_reduce_model)
+ols_plot_cooksd_bar(lm_custom_reduce_model)
+sqrt(mean(lm_custom_reduce_model$residuals^2))
+
+
+# #Final custom model Forward Optimization
+lm_custom_reduce_model_optf = ols_step_forward_p(lm_custom_reduce_model,pent = 0.1,details = TRUE)
+lm_custom_reduce_model_optmized = lm_custom_reduce_model_optf$model
+sqrt(mean(lm_custom_reduce_model_optmized$residuals^2))
+summary(lm_custom_reduce_model_optmized)
+
+#Testing custom model
+predicted_prices_cm = predict(lm_custom_reduce_model_optmized,df_hp_test_kaggle_new)
+
+df_hp_test_kaggle_cm_results = df_hp_test_kaggle_new
+df_hp_test_kaggle_cm_results$PredictedPrice = predicted_prices_cm
+df_hp_test_kaggle_cm_results_na = df_hp_test_kaggle_cm_results %>% filter(is.na(PredictedPrice))
+df_submission_cm <- data_frame('Id' = df_hp_test_kaggle_new$Id, 'SalePrice' = predicted_prices_cm)
+write.csv(df_submission_cm,str_sub_file,row.names = FALSE)
+
+
+
+#-----------------------------------------------------------------------------<
+
+
+#------------------------------>Other models<----------------------------------<
+lm_others_model = lm(SalePrice~.,data=df_hp_clean_ml)#df_hp_clean_ml)
+summary(lm_others_model)
+par(mfrow=c(2,2))
+plot(lm_others_model)
+
+#Cleaning outliers
+df_results_residuals = ols_plot_resid_lev(lm_others_model)
+df_results_res_out= df_results_residuals$data
+lst_outliers = df_results_res_out %>% filter(fct_color=="outlier" | fct_color=="outlier & leverage")
+lst_outliers_del = c(lst_outliers$obs,1454)
+df_hp_clean_ml_1 = df_hp_clean_ml[lst_outliers_del*-1,]
+
+lm_others_model = lm(SalePrice~.,data=df_hp_clean_ml_1)
+summary(lm_others_model)
+par(mfrow=c(2,2))
+plot(lm_others_model)
+
+#Forward
+lm_for_model_opt = ols_step_forward_p(lm_others_model,penter = 0.1,details = TRUE)
+summary(lm_for_model_opt$model)
+lm_model_fwd = lm_for_model_opt$model
+plot(lm_model_fwd)
+sqrt(mean(lm_model_fwd$residuals^2))
+predicted_prices_fwd = predict(lm_model_fwd,df_hp_test_kaggle_new)
+
+df_hp_test_kaggle_fwd_results = df_hp_test_kaggle_new
+df_hp_test_kaggle_fwd_results$PredictedPrice = predicted_prices_fwd
+df_hp_test_kaggle_fwd_results_na = df_hp_test_kaggle_fwd_results %>% filter(is.na(PredictedPrice))
+df_submission_fwd <- data_frame('Id' = df_hp_test_kaggle_new$Id, 'SalePrice' = predicted_prices_fwd)
+write.csv(df_submission_fwd,str_fwd_file,row.names = FALSE)
+
+
+#Backward
+lm_back_model_opt = ols_step_backward_p(lm_others_model,prem = 0.1,details = TRUE)
+summary(lm_back_model_opt$model)
+lm_model_back = lm_back_model_opt$model
+sqrt(mean(lm_model_back$residuals^2))
+predicted_prices_bk = predict(lm_model_back ,df_hp_test_kaggle_new)
+
+df_hp_test_kaggle_bk_results = df_hp_test_kaggle_new
+df_hp_test_kaggle_bk_results$PredictedPrice = predicted_prices_bk
+df_submission_bk <- data_frame('Id' = df_hp_test_kaggle_new$Id, 'SalePrice' = predicted_prices_bk)
+write.csv(df_submission_bk,str_back_file,row.names = FALSE)
+
+#Stepwise
+faic = stepAIC(lm_others_model, direction="both")
+lm_model_wise = faic
+summary(lm_model_wise)
+sqrt(mean(lm_model_wise$residuals^2))
+predicted_prices_sw = predict(lm_model_wise,df_hp_test_kaggle_new)
+
+df_hp_test_kaggle_sw_results = df_hp_test_kaggle_new
+df_hp_test_kaggle_sw_results$PredictedPrice = predicted_prices_sw
+df_hp_test_kaggle_sw_results_na = df_hp_test_kaggle_sw_results %>% filter(is.na(PredictedPrice))
+df_submission_sw <- data_frame('Id' = df_hp_test_kaggle_new$Id, 'SalePrice' = predicted_prices_sw)
+write.csv(df_submission_sw,str_stw_file,row.names = FALSE)
+
+
+
+```
+
+#Validating the models
+```{r}
+# Define training control Custom model
+
+train_control =  trainControl(method = "cv", number = 20)
+#train.control =  trainControl(method = "LOOCV")
+
+
+# Custom model
+model_tr_result = train(SalePrice ~., data = df_hp_clean_ml_custom_1, method = "lm",
+               trControl = train_control)
+print(model_tr_result)
+
+#Forward model
+
+cv_res = cv.lm(df_hp_clean_ml,lm_model_fwd)
+
+model_fwd_result = train(SalePrice~OverallQual+GrLivArea+Neighborhood+KitchenQual+RoofMatl+BsmtFinSF1+MSSubClass+BsmtExposure+SaleCondition+ExterQual+GarageArea+OverallCond+YearBuilt+LotArea+BsmtQual+TotalBsmtSF+Functional+BldgType+Exterior1st+BedroomAbvGr+Condition1+MSZoning+MasVnrArea+BsmtFullBath+Fireplaces+GarageType+OpenPorchSF+MasVnrType+Street+GarageCars+WoodDeckSF+GarageQual+GarageCond+LowQualFinSF+LandSlope+LotConfig+BsmtCond+YearRemodAdd+Condition2+Foundation+BsmtFinSF2+BsmtFinType1+KitchenAbvGr+RoofStyle+Exterior2nd+EnclosedPorch+Alley+Utilities+HeatingQC+MoSold+SaleType+X1stFlrSF+X3SsnPorch+BsmtHalfBath, data = df_hp_clean_ml, method = "lm",trControl = train_control)
+print(model_fwd_result)
+#write.csv(lm_for_model_opt$predictors,str_anamodel_file)
+
+#Backward validation
+
+lm_back_model_opt$model
+model_back_result = train(SalePrice~.-ScreenPorch-YrSold-Electrical-MiscFeature-CentralAir-GarageFinish-LotFrontage-Heating-
+                          ExterCond-BsmtFinType2-MiscVal-LandContour-LotShape-TotRmsAbvGrd-HalfBath-Fence-PavedDrive-MSSubClass-
+                           FullBath-GarageYrBlt-FireplaceQu-PoolArea-PoolQC-Utilities,data=df_hp_clean_ml,method = "lm",trControl = train_control) 
+               
+print(model_back_result)
+
+#Stepwise
+
+model_ws_result = train(SalePrice ~ MSZoning + LotArea + Street + Alley + 
+    Utilities + LotConfig + LandSlope + Neighborhood + Condition1 + 
+    Condition2 + BldgType + HouseStyle + OverallQual + OverallCond + 
+    YearBuilt + YearRemodAdd + RoofStyle + RoofMatl + Exterior1st + 
+    Exterior2nd + MasVnrType + MasVnrArea + ExterQual + Foundation + 
+    BsmtQual + BsmtCond + BsmtExposure + BsmtFinType1 + BsmtFinSF1 + 
+    BsmtFinSF2 + BsmtUnfSF + HeatingQC + X1stFlrSF + X2ndFlrSF + 
+    LowQualFinSF + BsmtFullBath + BsmtHalfBath + BedroomAbvGr + 
+    KitchenAbvGr + KitchenQual + Functional + Fireplaces + FireplaceQu + 
+    GarageType + GarageYrBlt + GarageCars + GarageArea + GarageQual + 
+    GarageCond + WoodDeckSF + OpenPorchSF + EnclosedPorch + X3SsnPorch + 
+    PoolArea + MoSold + SaleCondition + PoolQC, data = df_hp_clean_ml_1,method = "lm",trControl = train_control) 
+
+model_ws_result
+write.csv(lm_for_model_opt$predictors,str_anamodel_file)
+
+lm_model_wise
+
+```
+

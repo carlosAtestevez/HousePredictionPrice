@@ -1,0 +1,14 @@
+name: HousePricePrediction
+title: HousePricePrediction
+username:
+account: estevez
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 9548407
+bundleId: 7525769
+url: https://estevez.shinyapps.io/HousePricePrediction/
+when: 1691038049.604
+lastSyncTime: 1691038049.60401
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: server_test.R|ui_test.R
